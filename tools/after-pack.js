@@ -40,3 +40,4 @@ exports.default = async function afterPack(context) {
   }
   console.log('[afterPack] 图标/版本信息已写入:', exePath);
 };
+
