@@ -1,6 +1,8 @@
 # DSH 桌面版（dsh-desktop）
 
 > DeepSeek Harness（DSH）的本地桌面封装套壳程序 —— **双击即开启，关窗即停止**。
+>
+> 源码仓库：[github.com/huanshi2/dsh-desktop](https://github.com/huanshi2/dsh-desktop) · 下载：[GitHub Releases](https://github.com/huanshi2/dsh-desktop/releases)
 
 DSH（DeepSeek Harness）本身是一个命令行/服务程序：`dsh web` 会在本地启动 Web 服务（默认 http://127.0.0.1:3080），再在浏览器里打开界面。本套壳程序用 Electron 把它封装成普通桌面软件：
 
@@ -50,20 +52,14 @@ npx --yes @deepseek-ai/dsh --version   # 验证
 升级后重新打开桌面版即生效。也可以在 App 里点 **「帮助 → 检查 DSH 更新」** 查看是否落后于 npm 最新版。
 
 ### 2. 桌面版自身更新
-- 本地自用构建：无更新渠道，检查时会提示「未配置更新源」。
-- 若发布到 GitHub Releases：在 `%APPDATA%\DSH桌面版\config.json` 里设置：
-
-```json
-{ "updateRepo": "用户名/仓库名" }
-```
-
-之后 **「帮助 → 检查桌面版更新」** 会比对 GitHub 最新 Release 并打开下载页。
+- 从 [GitHub Releases](https://github.com/huanshi2/dsh-desktop/releases) 下载最新 exe 覆盖即可。
+- 本仓库已内置更新源（`config.json` 的 `updateRepo: "huanshi2/dsh-desktop"`）：App 里点 **「帮助 → 检查桌面版更新」** 会比对 GitHub 最新 Release（tag 如 `v1.0.0`）并打开下载页。
 
 ---
 
 ## 使用
 
-1. 下载或构建 `DSH桌面版-1.0.0.exe`（见下文「构建」），双击运行。
+1. 从 [Releases](https://github.com/huanshi2/dsh-desktop/releases) 下载 `DSH-Desktop-1.0.0.exe`（或按「构建」自己打包），双击运行。
 2. 等待加载页结束，DSH 界面自动打开（默认 http://127.0.0.1:3080）。
 3. 首次启动较慢（1~5 分钟）：DSH 需要初始化 profile 并安装插件，请耐心等待。
 4. 用完点右上角 ✕ 关闭，DSH 服务随之停止。
