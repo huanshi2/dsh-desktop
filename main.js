@@ -458,7 +458,7 @@ function createWindow() {
     minWidth: 900,
     minHeight: 600,
     title: `${APP_TITLE} v${APP_VERSION}`,
-    autoHideMenuBar: true,
+    autoHideMenuBar: false, // 菜单栏常显："文件 / 帮助"（关于、检查更新等入口可见）
     backgroundColor: '#0f1220',
     icon: path.join(__dirname, 'build', 'icon.png'),
     webPreferences: {
