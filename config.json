@@ -1,0 +1,7 @@
+{
+  "port": 3080,
+  "dshCommand": null,
+  "dshArgs": [],
+  "bootTimeoutSec": 300,
+  "updateRepo": "huanshi2/dsh-desktop"
+}
