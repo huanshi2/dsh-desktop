@@ -1,11 +1,12 @@
 /**
- * DSH 桌面版 —— DeepSeek Harness 的本地 Electron 封装
+ * DSH Desktop —— DeepSeek Harness 的本地 Electron 封装
  *
  * 功能：
  *   1. 启动 App 时自动在后台拉起 `dsh web`（真实 DSH 服务，默认端口 3080）
  *   2. 服务就绪后，窗口加载 DSH 浏览器界面（原生标题栏：右上角最小化/最大化/关闭）
  *   3. 点关闭 = 结束 DSH 进程（连同其子进程树）并退出 App，不留后台残留
  *   4. 端口被占用时提示：可直接打开已有实例
+ *   5. 启动后后台静默检查 DSH 内核更新；渲染进程崩溃自动重载
  *
  * 可覆盖项（config.json 或环境变量，环境变量优先）：
  *   DSH_DESKTOP_PORT     服务端口（默认 3080）
@@ -23,7 +24,7 @@ const net = require('net');
 const http = require('http');
 
 const DEFAULT_PORT = 3080;
-const APP_TITLE = 'DSH 桌面版';
+const APP_TITLE = 'DSH Desktop';
 const BOOT_TIMEOUT_MS = 5 * 60 * 1000; // 首次启动可能需安装插件，给 5 分钟
 
 // App 自身版本（打包后从 asar 内 package.json 读取）
@@ -253,8 +254,18 @@ async function startDsh() {
         title: APP_TITLE,
         message: 'DSH 服务已退出',
         detail: `进程退出码: ${code}\n\n日志: ${LOG_PATH}`,
-        buttons: ['退出'],
-      }).then(() => app.quit());
+        buttons: ['重新启动', '退出'],
+        defaultId: 0,
+        cancelId: 1,
+      }).then(({ response }) => {
+        if (response === 0) {
+          log('用户选择重新启动');
+          showLoading(mainWindow, '正在重新启动 DSH…');
+          startDsh();
+        } else {
+          app.quit();
+        }
+      });
     }
   });
 
@@ -421,7 +432,7 @@ function buildMenu() {
     {
       label: '文件',
       submenu: [
-        { label: '重启服务', click: () => { log('菜单：重启服务'); stopDsh(); boot(); } },
+        { label: '重启服务', click: () => { log('菜单：重启服务'); showLoading(mainWindow, '正在重新启动 DSH…'); stopDsh(); boot({ skipPortCheck: true }); } },
         { type: 'separator' },
         { label: '退出', accelerator: 'Alt+F4', click: () => app.quit() },
       ],
@@ -457,7 +468,7 @@ function createWindow() {
     },
   });
 
-  // 标题栏固定显示 "DSH 桌面版 vX.Y.Z"，不被网页标题覆盖
+  // 标题栏固定显示 "DSH Desktop vX.Y.Z"，不被网页标题覆盖
   mainWindow.on('page-title-updated', (event) => {
     event.preventDefault();
     mainWindow.setTitle(`${APP_TITLE} v${APP_VERSION}`);
@@ -467,6 +478,18 @@ function createWindow() {
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     if (/^https?:/i.test(url)) shell.openExternal(url);
     return { action: 'deny' };
+  });
+
+  // 渲染进程崩溃时自动重载（服务通常仍在，重载即可恢复界面）
+  mainWindow.webContents.on('render-process-gone', (event, details) => {
+    log(`渲染进程异常 (${details.reason})，尝试重载界面`);
+    if (!quitting) {
+      setTimeout(() => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.loadURL(`http://127.0.0.1:${PORT}`);
+        }
+      }, 1500);
+    }
   });
 
   mainWindow.on('close', () => {
@@ -484,9 +507,10 @@ function showLoading(win, text) {
   win.loadFile(path.join(__dirname, 'loading.html'), { query: { text: encodeURIComponent(text) } });
 }
 
-async function boot() {
+async function boot(options = {}) {
   // 端口已被占用：可能是已有 DSH 实例（或上次没关干净）
-  if (await portInUse(PORT)) {
+  // skipPortCheck=true（如"重启服务"）时跳过检查，直接拉起自己的实例
+  if (!options.skipPortCheck && await portInUse(PORT)) {
     const { response } = await dialog.showMessageBox(mainWindow, {
       type: 'question',
       title: APP_TITLE,
@@ -517,6 +541,8 @@ async function boot() {
   const ready = await startDsh();
   if (ready && mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.loadURL(`http://127.0.0.1:${PORT}`);
+    // 后台静默检查 DSH 内核更新：有新版本才提示
+    checkDshUpdate(false).catch(() => {});
   }
 }
 

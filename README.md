@@ -1,4 +1,9 @@
-# DSH 桌面版（dsh-desktop）
+# DSH Desktop（dsh-desktop）
+
+![GitHub release](https://img.shields.io/github/v/release/huanshi2/dsh-desktop)
+![GitHub Actions](https://img.shields.io/github/actions/workflow/status/huanshi2/dsh-desktop/release.yml?label=build)
+![License](https://img.shields.io/github/license/huanshi2/dsh-desktop)
+![Platform](https://img.shields.io/badge/platform-Windows-0078d6)
 
 > DeepSeek Harness（DSH）的本地桌面封装套壳程序 —— **双击即开启，关窗即停止**。
 >
@@ -20,27 +25,36 @@ DSH（DeepSeek Harness）本身是一个命令行/服务程序：`dsh web` 会�
 | 原生窗口控制 | 右上角最小化/最大化/关闭，与普通软件一致 |
 | 干净退出 | 关闭窗口自动 `taskkill /T /F` 结束 DSH 进程树 |
 | 单实例锁 | 重复双击只会聚焦已有窗口，不会重复启动服务 |
-| 端口冲突处理 | 3080 被占用时弹窗询问「直接打开现有实例 / 退出」 |
+| 端口冲突处理 | 端口被占用时弹窗询问「直接打开现有实例 / 退出」 |
 | 启动引导页 | 服务就绪前显示加载页（首次启动需装插件，最长等待 5 分钟） |
 | 自动解析 dsh | 依次尝试：`dsh` 命令 → npm 缓存 → `npx` 在线兜底 |
-| 日志 | 运行日志写入 `%APPDATA%\DSH桌面版\dsh.log` |
+| 日志 | 运行日志写入 `%APPDATA%\DSH Desktop\dsh.log` |
 | 版本说明 | 标题栏常驻显示版本号；「帮助 → 关于」查看详细信息 |
-| 检查更新 | 「帮助」菜单可分别检查 **DSH 内核**（npm）与**桌面版自身**（GitHub Releases）更新 |
+| 检查更新 | 启动后后台**静默检查** DSH 内核更新（有新版本才提示）；「帮助」菜单可手动检查 DSH 内核与桌面版（GitHub Releases） |
+| 崩溃自愈 | 渲染进程崩溃自动重载；DSH 服务异常退出可一键「重新启动」 |
 | 重启服务 | 「文件 → 重启服务」快速重启 DSH 进程 |
+| 自动打包 | GitHub Actions：推送 `v*` 标签即自动构建 exe 并发布 Release |
 
 ## 版本说明（Changelog）
 
-### v1.0.0（当前）
+### v1.1.0（当前）
+- 产品名改为全英文 **DSH Desktop**（窗口标题 / exe 文件名 / 快捷方式 / 数据目录）
+- 启动后自动静默检查 DSH 内核更新（仅在有新版时提示）
+- 健壮性：DSH 服务异常退出时提供「重新启动」；渲染进程崩溃自动重载；「重启服务」不再误判端口占用
+- 新增 GitHub Actions：推 `v*` 标签自动打包发布（无需手动构建）
+- README 徽章与文档完善
+
+### v1.0.0
 - 首个可用版本：完整的启动/停止/窗口控制闭环
 - 加载页、单实例锁、端口冲突弹窗、日志
 - 关于对话框（App 版本 / DSH 内核版本 / 端口 / 配置与日志路径）
-- 检查更新：DSH 内核（npm registry）与桌面版（GitHub Releases，需配置 `updateRepo`）
+- 检查更新：DSH 内核（npm registry）与桌面版（GitHub Releases）
 - 便携版单文件 exe（约 70 MB），图标与版本信息已内嵌
 
 ## 更新（Upgrade）
 
 ### 1. DSH 内核更新（重要）
-DSH 本体由官方持续迭代，桌面版每次启动都会使用**当前缓存的最新内核**。
+DSH 本体由官方持续迭代，桌面版每次启动都会使用**当前缓存的最新内核**，并自动静默检查新版本。
 升级内核（在终端执行）：
 
 ```bash
@@ -49,17 +63,25 @@ npm i -g @deepseek-ai/dsh        # 全局安装
 npx --yes @deepseek-ai/dsh --version   # 验证
 ```
 
-升级后重新打开桌面版即生效。也可以在 App 里点 **「帮助 → 检查 DSH 更新」** 查看是否落后于 npm 最新版。
+升级后重新打开桌面版即生效。也可以在 App 里点 **「帮助 → 检查 DSH 更新」** 手动查看。
 
 ### 2. 桌面版自身更新
 - 从 [GitHub Releases](https://github.com/huanshi2/dsh-desktop/releases) 下载最新 exe 覆盖即可。
-- 本仓库已内置更新源（`config.json` 的 `updateRepo: "huanshi2/dsh-desktop"`）：App 里点 **「帮助 → 检查桌面版更新」** 会比对 GitHub 最新 Release（tag 如 `v1.0.0`）并打开下载页。
+- 本仓库已内置更新源（`config.json` 的 `updateRepo: "huanshi2/dsh-desktop"`）：App 里点 **「帮助 → 检查桌面版更新」** 会比对 GitHub 最新 Release（tag 如 `v1.1.0`）并打开下载页。
+
+### 3. 维护者发布新版本
+推送标签即自动构建发布（GitHub Actions）：
+
+```bash
+git tag v1.2.0
+git push origin v1.2.0
+```
 
 ---
 
 ## 使用
 
-1. 从 [Releases](https://github.com/huanshi2/dsh-desktop/releases) 下载 `DSH-Desktop-1.0.0.exe`（或按「构建」自己打包），双击运行。
+1. 从 [Releases](https://github.com/huanshi2/dsh-desktop/releases) 下载 `DSH-Desktop-1.1.0.exe`（或按「构建」自己打包），双击运行。
 2. 等待加载页结束，DSH 界面自动打开（默认 http://127.0.0.1:3080）。
 3. 首次启动较慢（1~5 分钟）：DSH 需要初始化 profile 并安装插件，请耐心等待。
 4. 用完点右上角 ✕ 关闭，DSH 服务随之停止。
@@ -68,15 +90,15 @@ npx --yes @deepseek-ai/dsh --version   # 验证
 
 ## 配置
 
-配置文件优先级：`%APPDATA%\DSH桌面版\config.json`（打包后）> 应用目录 `config.json`。
+配置文件优先级：`%APPDATA%\DSH Desktop\config.json`（打包后）> 应用目录 `config.json`。
 
 ```jsonc
 {
-  "port": 3080,            // DSH 服务端口
+  "port": 3080,            // DSH 服务端口（如需与网页版并存，可改为 3090）
   "dshCommand": null,      // 自定义启动命令（整条 shell 命令），如 "dsh web --port 8080"
   "dshArgs": [],           // 附加参数
   "bootTimeoutSec": 300,   // 启动超时（秒）
-  "updateRepo": null       // 桌面版更新源，如 "huanshi2/dsh-desktop"
+  "updateRepo": "huanshi2/dsh-desktop"  // 桌面版更新源
 }
 ```
 
@@ -88,13 +110,14 @@ npx --yes @deepseek-ai/dsh --version   # 验证
 npm install          # 安装 electron / electron-builder
 npm start            # 开发模式运行（默认端口 3080）
 npm run icon         # 重新生成图标（纯 Node 绘制，无依赖）
-npm run dist         # 打包便携版 exe → dist/DSH桌面版-<版本>.exe
+npm run dist         # 打包便携版 exe → dist/DSH-Desktop-<版本>.exe
 ```
 
 ### 打包说明（踩坑记录）
 
 - 必须用 `signAndEditExecutable: false`（本机无管理员权限，winCodeSign 包里的 macOS 符号链接解压会失败）。
 - 图标/版本信息通过 `tools/after-pack.js`（electron-builder `afterPack` 钩子）写入**内层** exe —— 打包完成后再 rcedit 会破坏便携版 NSIS 外壳，导致运行时 "NSIS Error"。
+- GitHub Actions 自动打包见 `.github/workflows/release.yml`，推送 `v*` 标签即触发。
 
 ## 目录结构
 
@@ -104,6 +127,7 @@ dsh-desktop/
 ├── loading.html          # 启动加载页
 ├── config.json           # 默认配置
 ├── generate-icon.js      # 纯 Node 图标生成（build/icon.png）
+├── .github/workflows/    # GitHub Actions 自动打包发布
 ├── tools/
 │   ├── after-pack.js     # 打包钩子：写图标/版本信息
 │   ├── png-to-ico.js     # PNG → ICO 转换
@@ -117,10 +141,11 @@ dsh-desktop/
 | 现象 | 处理 |
 |---|---|
 | 首次启动 1~5 分钟 | 正常：DSH 初始化 profile、安装插件 |
-| 提示「端口 3080 已被占用」 | 已有 DSH 实例在运行：可「直接打开」复用；或先结束占用进程 |
-| 「DSH 服务已退出 / 启动超时」 | 查看 `%APPDATA%\DSH桌面版\dsh.log` 定位原因 |
+| 提示「端口已被占用」 | 已有 DSH 实例在运行：可「直接打开」复用；或先结束占用进程 |
+| 「DSH 服务已退出 / 启动超时」 | 弹窗点「重新启动」重试；查看 `%APPDATA%\DSH Desktop\dsh.log` 定位原因 |
 | 提示 DSH 内核有更新 | 终端执行 `npm i -g @deepseek-ai/dsh` 后重启桌面版 |
 | 关闭窗口后端口仍被占用 | 一般不会发生（进程树已杀）；若出现，`netstat -ano \| findstr 3080` 手动清理 |
+| 与网页版并存 | 把端口配置为 3090（`%APPDATA%\DSH Desktop\config.json`），两个实例互不干扰 |
 
 ## 协议
 

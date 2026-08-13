@@ -28,11 +28,11 @@ exports.default = async function afterPack(context) {
   const args = [
     exePath,
     '--set-icon', ICO,
-    '--set-version-string', 'ProductName', 'DSH桌面版',
-    '--set-version-string', 'FileDescription', 'DSH 桌面版',
+    '--set-version-string', 'ProductName', 'DSH Desktop',
+    '--set-version-string', 'FileDescription', 'DSH Desktop - DeepSeek Harness desktop app',
     '--set-version-string', 'CompanyName', 'local',
-    '--set-file-version', '1.0.0.0',
-    '--set-product-version', '1.0.0.0',
+    '--set-file-version', '1.1.0.0',
+    '--set-product-version', '1.1.0.0',
   ];
   const r = spawnSync(RCEDIT, args, { stdio: 'inherit' });
   if (r.status !== 0) {

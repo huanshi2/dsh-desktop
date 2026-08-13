@@ -1,7 +1,7 @@
 {
   "name": "dsh-desktop",
-  "productName": "DSH桌面版",
-  "version": "1.0.0",
+  "productName": "DSH Desktop",
+  "version": "1.1.0",
   "description": "DeepSeek Harness (DSH) 桌面封装：一键启动 dsh web，关闭窗口即停止服务",
   "main": "main.js",
   "author": "local",
@@ -18,7 +18,7 @@
   },
   "build": {
     "appId": "com.local.dsh-desktop",
-    "productName": "DSH桌面版",
+    "productName": "DSH Desktop",
     "directories": {
       "output": "dist",
       "buildResources": "build"
@@ -37,7 +37,7 @@
       "signAndEditExecutable": false
     },
     "portable": {
-      "artifactName": "DSH桌面版-${version}.exe"
+      "artifactName": "DSH-Desktop-${version}.exe"
     },
     "afterPack": "tools/after-pack.js"
   }
