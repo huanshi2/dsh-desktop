@@ -16,7 +16,7 @@
  */
 'use strict';
 
-const { app, BrowserWindow, dialog, shell, Menu, ipcMain } = require('electron');
+const { app, BrowserWindow, WebContentsView, dialog, shell, Menu, ipcMain, nativeTheme } = require('electron');
 const { spawn, spawnSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
@@ -25,6 +25,7 @@ const http = require('http');
 
 const DEFAULT_PORT = 3080;
 const APP_TITLE = 'DSH Desktop';
+const TITLEBAR_HEIGHT = 36; // 自绘标题栏高度（px），与 titleBarOverlay 一致
 const BOOT_TIMEOUT_MS = 5 * 60 * 1000; // 首次启动可能需安装插件，给 5 分钟
 
 // App 自身版本（打包后从 asar 内 package.json 读取）
@@ -32,7 +33,8 @@ const APP_VERSION = (() => {
   try { return require('./package.json').version; } catch { return '0.0.0'; }
 })();
 
-let mainWindow = null;
+let mainWindow = null; // 主窗口（titleBarOverlay 标题栏 + WebContentsView）
+let dshView = null;    // DSH 页面视图
 let dshProcess = null;
 let ownedServer = false; // 是否由本 App 拉起的 DSH（决定关闭时要不要杀掉）
 let quitting = false;
@@ -260,7 +262,7 @@ async function startDsh() {
       }).then(({ response }) => {
         if (response === 0) {
           log('用户选择重新启动');
-          showLoading(mainWindow, '正在重新启动 DSH…');
+          showLoading('正在重新启动 DSH…');
           startDsh();
         } else {
           app.quit();
@@ -431,15 +433,38 @@ async function checkAppUpdate(manual = true) {
 // 无菜单栏："帮助/更新/关于"入口改为 DSH 界面右上角悬浮按钮（见 preload.js）
 Menu.setApplicationMenu(null);
 
-// 悬浮帮助按钮 → 主进程（见 preload.js 的 dshDesktopBridge）
+// 标题栏"?"按钮 → 主进程（见 titlebar-preload.js 的 titlebarBridge）
 function registerHelpIpc() {
-  ipcMain.handle('dsh-desktop:about', () => { log('IPC: about'); showAbout(); return true; });
-  ipcMain.handle('dsh-desktop:check-dsh-update', () => { log('IPC: check-dsh-update'); checkDshUpdate(true); return true; });
-  ipcMain.handle('dsh-desktop:check-app-update', () => { log('IPC: check-app-update'); checkAppUpdate(true); return true; });
-  ipcMain.handle('dsh-desktop:version', () => APP_VERSION);
+  ipcMain.on('tb:menu-action', (e, action) => {
+    log(`帮助菜单动作: ${action}`);
+    if (action === 'check-update') checkDshUpdate(true);
+    else if (action === 'about') showAbout();
+  });
+  ipcMain.handle('tb:version', () => APP_VERSION);
+  // 兼容（不再使用）
+  ipcMain.handle('dsh-desktop:about', () => { showAbout(); return true; });
+  ipcMain.handle('dsh-desktop:check-dsh-update', () => { checkDshUpdate(true); return true; });
+  ipcMain.handle('dsh-desktop:check-app-update', () => { checkAppUpdate(true); return true; });
 }
 
-// ---------------- 窗口 ----------------
+// ---------------- 窗口（titleBarOverlay：系统按钮 + 自绘标题栏 + WebContentsView） ----------------
+function overlayThemeColors() {
+  return nativeTheme.shouldUseDarkColors
+    ? { color: '#0f1220', symbolColor: '#c7d0e2' }
+    : { color: '#eef1f7', symbolColor: '#3a4256' };
+}
+
+function applyOverlayTheme() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  mainWindow.setTitleBarOverlay({ ...overlayThemeColors(), height: TITLEBAR_HEIGHT });
+}
+
+function layout() {
+  if (!mainWindow || !dshView || mainWindow.isDestroyed()) return;
+  const [w, h] = mainWindow.getContentSize();
+  dshView.setBounds({ x: 0, y: TITLEBAR_HEIGHT, width: w, height: Math.max(0, h - TITLEBAR_HEIGHT) });
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1280,
@@ -447,40 +472,54 @@ function createWindow() {
     minWidth: 900,
     minHeight: 600,
     title: `${APP_TITLE} v${APP_VERSION}`,
-    autoHideMenuBar: true,
+    // 无系统标题栏：自绘标题栏（标题 + "?"帮助按钮），但保留系统原生最小化/最大化/关闭按钮
+    titleBarStyle: 'hidden',
+    titleBarOverlay: { ...overlayThemeColors(), height: TITLEBAR_HEIGHT },
     backgroundColor: '#0f1220',
     icon: path.join(__dirname, 'build', 'icon.png'),
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
-      preload: path.join(__dirname, 'preload.js'),
+      preload: path.join(__dirname, 'titlebar-preload.js'),
     },
   });
 
-  // 标题栏固定显示 "DSH Desktop vX.Y.Z"，不被网页标题覆盖
-  mainWindow.on('page-title-updated', (event) => {
-    event.preventDefault();
-    mainWindow.setTitle(`${APP_TITLE} v${APP_VERSION}`);
+  // 标题栏页面（左侧标题/版本 + 右侧"?"按钮；系统按钮在最右）
+  mainWindow.loadFile(path.join(__dirname, 'titlebar.html'));
+
+  // DSH 页面视图（标题栏下方）
+  dshView = new WebContentsView({
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
   });
+  mainWindow.contentView.addChildView(dshView);
+  layout();
+  mainWindow.on('resize', layout);
 
   // 外部链接交给系统浏览器，不在 App 内开新窗口
-  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+  dshView.webContents.setWindowOpenHandler(({ url }) => {
     if (/^https?:/i.test(url)) shell.openExternal(url);
     return { action: 'deny' };
   });
 
   // 渲染进程崩溃时自动重载（服务通常仍在，重载即可恢复界面）
-  mainWindow.webContents.on('render-process-gone', (event, details) => {
+  dshView.webContents.on('render-process-gone', (event, details) => {
     log(`渲染进程异常 (${details.reason})，尝试重载界面`);
     if (!quitting) {
       setTimeout(() => {
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          mainWindow.loadURL(`http://127.0.0.1:${PORT}`);
+        if (dshView && !dshView.webContents.isDestroyed()) {
+          dshView.webContents.loadURL(`http://127.0.0.1:${PORT}`);
         }
       }, 1500);
     }
   });
+
+  // 系统深浅色主题切换 → 同步标题栏 overlay 颜色（标题栏文字由 CSS 自动跟随）
+  nativeTheme.on('updated', applyOverlayTheme);
 
   mainWindow.on('close', () => {
     log('窗口关闭 → 退出 App 并停止 DSH');
@@ -488,13 +527,22 @@ function createWindow() {
 
   mainWindow.on('closed', () => {
     mainWindow = null;
+    dshView = null;
   });
 
   return mainWindow;
 }
 
-function showLoading(win, text) {
-  win.loadFile(path.join(__dirname, 'loading.html'), { query: { text: encodeURIComponent(text) } });
+function showLoading(text) {
+  if (dshView && !dshView.webContents.isDestroyed()) {
+    dshView.webContents.loadFile(path.join(__dirname, 'loading.html'), { query: { text: encodeURIComponent(text) } });
+  }
+}
+
+function loadDshPage() {
+  if (dshView && !dshView.webContents.isDestroyed()) {
+    dshView.webContents.loadURL(`http://127.0.0.1:${PORT}`);
+  }
 }
 
 async function boot(options = {}) {
@@ -517,7 +565,7 @@ async function boot(options = {}) {
     ownedServer = false;
     log(`端口 ${PORT} 已有服务，直接打开现有实例`);
     if (await waitForServer(PORT, 15000)) {
-      mainWindow.loadURL(`http://127.0.0.1:${PORT}`);
+      loadDshPage();
     } else {
       dialog.showMessageBox(mainWindow, {
         type: 'error', title: APP_TITLE, message: '端口占用但服务无响应', detail: `日志: ${LOG_PATH}`,
@@ -527,10 +575,10 @@ async function boot(options = {}) {
     return;
   }
 
-  showLoading(mainWindow, '正在启动 DeepSeek Harness…');
+  showLoading('正在启动 DeepSeek Harness…');
   const ready = await startDsh();
   if (ready && mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.loadURL(`http://127.0.0.1:${PORT}`);
+    loadDshPage();
     // 后台静默检查 DSH 内核更新：有新版本才提示
     checkDshUpdate(false).catch(() => {});
   }

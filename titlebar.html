@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'">
+<title>DSH Desktop</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --tb-bg1: #131a30;
+    --tb-bg2: #0f1220;
+    --tb-border: rgba(76, 194, 255, .18);
+    --tb-fg: #e8ecf4;
+    --tb-ver: #6fa8dc;
+    --tb-btn: #c7d0e2;
+    --tb-hover: rgba(255, 255, 255, .12);
+    --tb-active: rgba(255, 255, 255, .18);
+    --menu-bg: #151c33;
+    --menu-border: rgba(76, 194, 255, .25);
+    --menu-shadow: rgba(0, 0, 0, .55);
+    --menu-item-hover: rgba(76, 194, 255, .16);
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      color-scheme: light;
+      --tb-bg1: #f7f9fc;
+      --tb-bg2: #eef1f7;
+      --tb-border: rgba(37, 99, 235, .20);
+      --tb-fg: #1a2030;
+      --tb-ver: #2563eb;
+      --tb-btn: #3a4256;
+      --tb-hover: rgba(0, 0, 0, .08);
+      --tb-active: rgba(0, 0, 0, .14);
+      --menu-bg: #ffffff;
+      --menu-border: rgba(37, 99, 235, .22);
+      --menu-shadow: rgba(0, 0, 0, .18);
+      --menu-item-hover: rgba(37, 99, 235, .10);
+    }
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  /* html 高度 36px + overflow hidden 防滚动条；body 必须 overflow visible，否则下拉菜单被裁剪 */
+  html { width: 100%; height: 36px; overflow: hidden; }
+  body {
+    width: 100%;
+    min-height: 36px;
+    overflow: visible;
+    font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+    background: linear-gradient(180deg, var(--tb-bg1) 0%, var(--tb-bg2) 100%);
+    color: var(--tb-fg);
+    user-select: none;
+    border-bottom: 1px solid var(--tb-border);
+  }
+  #bar {
+    display: flex; align-items: center;
+    height: 36px;
+    padding: 0 148px 0 12px; /* 右侧预留系统窗口按钮区（最小化/最大化/关闭） */
+    -webkit-app-region: drag; /* 可拖拽移动窗口 */
+  }
+  .logo {
+    width: 18px; height: 18px; margin-right: 8px;
+    border-radius: 5px;
+    background: linear-gradient(135deg, #4cc2ff, #2f6bff);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 11px; font-weight: 700; color: #fff;
+    flex: none;
+  }
+  #title {
+    font-size: 12px; font-weight: 600; letter-spacing: .3px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  #title .ver { color: var(--tb-ver); font-weight: 400; margin-left: 6px; font-size: 11px; }
+  .spacer { flex: 1; }
+  /* "?"帮助按钮：位于最小化按钮左侧（系统按钮区占右侧 ~148px） */
+  #btn-help {
+    -webkit-app-region: no-drag;
+    width: 36px; height: 26px;
+    margin-right: 2px;
+    border: 1px solid var(--tb-border);
+    border-radius: 6px;
+    background: transparent;
+    color: var(--tb-btn);
+    font-size: 14px; font-weight: 600;
+    cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    transition: background .12s, color .12s;
+  }
+  #btn-help:hover { background: var(--tb-hover); color: var(--tb-fg); }
+  #btn-help:active { background: var(--tb-active); }
+
+  /* ===== 下拉菜单（HTML 实现：位置由 JS 按按钮实际坐标计算） ===== */
+  #menu {
+    position: fixed;
+    min-width: 170px;
+    padding: 4px;
+    background: var(--menu-bg);
+    border: 1px solid var(--menu-border);
+    border-radius: 8px;
+    box-shadow: 0 8px 24px var(--menu-shadow);
+    z-index: 2147483647;
+    font-size: 12px;
+    -webkit-app-region: no-drag;
+    display: none;
+  }
+  #menu.open { display: block; }
+  #menu .item {
+    padding: 7px 14px;
+    border-radius: 5px;
+    cursor: pointer;
+    color: var(--tb-fg);
+    white-space: nowrap;
+    transition: background .1s;
+  }
+  #menu .item:hover { background: var(--menu-item-hover); }
+</style>
+</head>
+<body>
+  <div id="bar">
+    <div class="logo">D</div>
+    <div id="title">DSH Desktop<span class="ver" id="ver"></span></div>
+    <div class="spacer"></div>
+    <button id="btn-help" title="帮助（检查更新 / 关于）">?</button>
+  </div>
+
+  <div id="menu">
+    <div class="item" data-action="check-update">检查更新</div>
+    <div class="item" data-action="about">关于 DSH Desktop</div>
+  </div>
+
+  <script>
+    const tb = window.titlebarBridge;
+    const btn = document.getElementById('btn-help');
+    const menu = document.getElementById('menu');
+
+    function openMenu() {
+      // 用按钮的实际渲染坐标定位菜单（CSS 像素，无 DPI 误差）：
+      // 菜单左缘 = 按钮左缘，菜单顶部 = 按钮下缘 + 4px → 从按钮正下方弹出
+      const r = btn.getBoundingClientRect();
+      menu.style.left = r.left + 'px';
+      menu.style.top = (r.bottom + 4) + 'px';
+      menu.classList.add('open');
+    }
+    function closeMenu() { menu.classList.remove('open'); }
+
+    if (tb) {
+      tb.getVersion().then(v => {
+        document.getElementById('ver').textContent = v ? 'v' + v : '';
+      }).catch(() => {});
+
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        menu.classList.contains('open') ? closeMenu() : openMenu();
+      });
+
+      // 点击菜单项 → 通知主进程执行（注意：直接走 preload 暴露的 tb，不要用主世界 bridge）
+      menu.querySelectorAll('.item').forEach(item => {
+        item.addEventListener('click', () => {
+          const action = item.dataset.action;
+          closeMenu();
+          tb.menuAction(action);
+        });
+      });
+
+      // 点击标题栏其他区域 → 关闭菜单
+      document.addEventListener('click', (e) => {
+        if (!e.target.closest('#menu') && !e.target.closest('#btn-help')) closeMenu();
+      });
+    }
+  </script>
+</body>
+</html>
