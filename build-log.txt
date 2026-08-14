@@ -1,0 +1,10 @@
+  • electron-builder  version=25.1.8 os=10.0.26200
+  • loaded configuration  file=package.json ("build" field)
+  • executing @electron/rebuild  electronVersion=33.4.11 arch=x64 buildFromSource=false appDir=./
+  • installing native dependencies  arch=x64
+  • completed installing native dependencies
+  • packaging       platform=win32 arch=x64 electron=33.4.11 appOutDir=dist\win-unpacked
+  • updating asar integrity executable resource  executablePath=dist\win-unpacked\DSH Desktop.exe
+[afterPack] 图标/版本信息已写入: D:\proj\dsh-desktop\dist\win-unpacked\DSH Desktop.exe
+  • building        target=portable file=dist\DSH-Desktop-1.1.1.exe archs=x64
+  • output file is locked for writing (maybe by virus scanner) => waiting for unlock...  
