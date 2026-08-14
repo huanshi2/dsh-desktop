@@ -315,13 +315,10 @@ function stopDsh() {
 function aboutDetail() {
   const dshVer = getLocalDshVersion();
   const lines = [
-    `DSH 桌面版 v${APP_VERSION}`,
+    `DSH Desktop v${APP_VERSION}`,
     `DSH 内核: ${dshVer || '未知（PATH/npx 方式启动）'}`,
-    `服务地址: http://127.0.0.1:${PORT}`,
-    `配置目录: ${app.getPath('userData')}`,
-    `日志文件: ${LOG_PATH}`,
     '',
-    'DSH 桌面版是 DeepSeek Harness (DSH) 的本地封装：',
+    'DSH Desktop 是 DeepSeek Harness (DSH) 的本地封装：',
     '双击启动 → 自动拉起 dsh web → 关闭窗口即停止服务。',
   ];
   return lines.join('\n');
