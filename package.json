@@ -1,7 +1,7 @@
 {
   "name": "dsh-desktop",
   "productName": "DSH Desktop",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "description": "DeepSeek Harness (DSH) 桌面封装：一键启动 dsh web，关闭窗口即停止服务",
   "main": "main.js",
   "author": "local",
@@ -46,4 +46,5 @@
     "afterPack": "tools/after-pack.js"
   }
 }
+
 

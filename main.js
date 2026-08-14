@@ -528,7 +528,8 @@ function registerHelpIpc() {
   ipcMain.on('hm:action', (e, action) => {
     log(`帮助菜单动作: ${action}`);
     closeHelpMenu();
-    if (action === 'check-update') checkDshUpdate(true);
+    if (action === 'check-dsh-update') checkDshUpdate(true);      // DSH 内核更新（npm）
+    else if (action === 'check-app-update') checkAppUpdate(true); // 桌面版更新（GitHub Releases）
     else if (action === 'about') showAbout();
   });
   ipcMain.handle('tb:version', () => APP_VERSION);

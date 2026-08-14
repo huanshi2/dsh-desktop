@@ -31,8 +31,8 @@ exports.default = async function afterPack(context) {
     '--set-version-string', 'ProductName', 'DSH Desktop',
     '--set-version-string', 'FileDescription', 'DSH Desktop - DeepSeek Harness desktop app',
     '--set-version-string', 'CompanyName', 'local',
-    '--set-file-version', '1.1.1.0',
-    '--set-product-version', '1.1.1.0',
+    '--set-file-version', '1.1.2.0',
+    '--set-product-version', '1.1.2.0',
   ];
   const r = spawnSync(RCEDIT, args, { stdio: 'inherit' });
   if (r.status !== 0) {
@@ -40,6 +40,7 @@ exports.default = async function afterPack(context) {
   }
   console.log('[afterPack] 图标/版本信息已写入:', exePath);
 };
+
 
 
 
