@@ -16,7 +16,7 @@
  */
 'use strict';
 
-const { app, BrowserWindow, dialog, shell, Menu } = require('electron');
+const { app, BrowserWindow, dialog, shell, Menu, ipcMain } = require('electron');
 const { spawn, spawnSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
@@ -427,27 +427,15 @@ async function checkAppUpdate(manual = true) {
   }
 }
 
-function buildMenu() {
-  const template = [
-    {
-      label: '文件',
-      submenu: [
-        { label: '重启服务', click: () => { log('菜单：重启服务'); showLoading(mainWindow, '正在重新启动 DSH…'); stopDsh(); boot({ skipPortCheck: true }); } },
-        { type: 'separator' },
-        { label: '退出', accelerator: 'Alt+F4', click: () => app.quit() },
-      ],
-    },
-    {
-      label: '帮助',
-      submenu: [
-        { label: `关于 ${APP_TITLE}`, click: showAbout },
-        { type: 'separator' },
-        { label: '检查 DSH 更新', click: () => checkDshUpdate(true) },
-        { label: '检查桌面版更新', click: () => checkAppUpdate(true) },
-      ],
-    },
-  ];
-  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+// 无菜单栏："帮助/更新/关于"入口改为 DSH 界面右上角悬浮按钮（见 preload.js）
+Menu.setApplicationMenu(null);
+
+// 悬浮帮助按钮 → 主进程（见 preload.js 的 dshDesktopBridge）
+function registerHelpIpc() {
+  ipcMain.handle('dsh-desktop:about', () => { showAbout(); return true; });
+  ipcMain.handle('dsh-desktop:check-dsh-update', () => { checkDshUpdate(true); return true; });
+  ipcMain.handle('dsh-desktop:check-app-update', () => { checkAppUpdate(true); return true; });
+  ipcMain.handle('dsh-desktop:version', () => APP_VERSION);
 }
 
 // ---------------- 窗口 ----------------
@@ -458,13 +446,14 @@ function createWindow() {
     minWidth: 900,
     minHeight: 600,
     title: `${APP_TITLE} v${APP_VERSION}`,
-    autoHideMenuBar: false, // 菜单栏常显："文件 / 帮助"（关于、检查更新等入口可见）
+    autoHideMenuBar: true,
     backgroundColor: '#0f1220',
     icon: path.join(__dirname, 'build', 'icon.png'),
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
+      preload: path.join(__dirname, 'preload.js'),
     },
   });
 
@@ -559,7 +548,7 @@ if (!gotLock) {
   });
 
   app.whenReady().then(() => {
-    buildMenu();
+    registerHelpIpc();
     createWindow();
     boot();
 
