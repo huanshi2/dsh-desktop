@@ -323,6 +323,7 @@ function aboutDetail() {
 }
 
 function showAbout() {
+  log(`showAbout 被调用 (mainWindow=${!!mainWindow})`);
   dialog.showMessageBox(mainWindow || undefined, {
     type: 'info',
     title: `关于 ${APP_TITLE}`,
@@ -432,9 +433,9 @@ Menu.setApplicationMenu(null);
 
 // 悬浮帮助按钮 → 主进程（见 preload.js 的 dshDesktopBridge）
 function registerHelpIpc() {
-  ipcMain.handle('dsh-desktop:about', () => { showAbout(); return true; });
-  ipcMain.handle('dsh-desktop:check-dsh-update', () => { checkDshUpdate(true); return true; });
-  ipcMain.handle('dsh-desktop:check-app-update', () => { checkAppUpdate(true); return true; });
+  ipcMain.handle('dsh-desktop:about', () => { log('IPC: about'); showAbout(); return true; });
+  ipcMain.handle('dsh-desktop:check-dsh-update', () => { log('IPC: check-dsh-update'); checkDshUpdate(true); return true; });
+  ipcMain.handle('dsh-desktop:check-app-update', () => { log('IPC: check-app-update'); checkAppUpdate(true); return true; });
   ipcMain.handle('dsh-desktop:version', () => APP_VERSION);
 }
 
