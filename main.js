@@ -38,6 +38,9 @@ let dshView = null;    // DSH 页面视图
 let dshProcess = null;
 let ownedServer = false; // 是否由本 App 拉起的 DSH（决定关闭时要不要杀掉）
 let quitting = false;
+let helpMenuWin = null; // "?"帮助按钮的下拉菜单（独立子窗口，避免被 WebContentsView 遮挡）
+const HELP_MENU_W = 190; // 菜单窗口宽（px，DIP）
+const HELP_MENU_H = 78;  // 菜单窗口高（px，DIP）
 
 // ---------------- 配置 ----------------
 // 测试/自定义用户数据目录（必须在 app ready 之前设置）
@@ -434,9 +437,97 @@ async function checkAppUpdate(manual = true) {
 Menu.setApplicationMenu(null);
 
 // 标题栏"?"按钮 → 主进程（见 titlebar-preload.js 的 titlebarBridge）
+// 菜单是独立子窗口（helpmenu.html）：titlebar 的 DOM 菜单会被其下的 WebContentsView 遮挡，
+// 因此菜单由主进程用真实顶层窗口弹出，永远可见、可点击。
+let helpReposTimer = null;
+
+function getHelpBtnRect() {
+  return mainWindow.webContents.executeJavaScript(`(() => {
+    const b = document.getElementById('btn-help');
+    if (!b) return null;
+    const r = b.getBoundingClientRect();
+    return { left: r.left, right: r.right, top: r.top, bottom: r.bottom };
+  })()`).catch(() => null);
+}
+
+function helpMenuPos() {
+  // 菜单左缘 = 按钮左缘，顶部 = 按钮下缘 + 4px（DIP 坐标，与 DOM rect 同一坐标系）
+  return getHelpBtnRect().then((r) => {
+    if (!r) return null;
+    const cb = mainWindow.getContentBounds();
+    return { x: Math.round(cb.x + r.left), y: Math.round(cb.y + r.bottom + 4) };
+  });
+}
+
+function closeHelpMenu() {
+  if (helpMenuWin && !helpMenuWin.isDestroyed()) {
+    helpMenuWin.close();
+  }
+}
+
+function repositionHelpMenu() {
+  if (!helpMenuWin || helpMenuWin.isDestroyed() || !mainWindow || mainWindow.isDestroyed()) return;
+  helpMenuPos().then((p) => {
+    if (p && helpMenuWin && !helpMenuWin.isDestroyed()) {
+      const [cx, cy] = helpMenuWin.getPosition();
+      if (cx !== p.x || cy !== p.y) helpMenuWin.setPosition(p.x, p.y);
+    }
+  });
+}
+
+function scheduleRepositionHelpMenu() {
+  if (helpReposTimer) clearTimeout(helpReposTimer);
+  helpReposTimer = setTimeout(repositionHelpMenu, 50);
+}
+
+function openHelpMenu() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (helpMenuWin && !helpMenuWin.isDestroyed()) { closeHelpMenu(); return; }
+  helpMenuPos().then((p) => {
+    if (!p) return;
+    helpMenuWin = new BrowserWindow({
+      x: p.x,
+      y: p.y,
+      width: HELP_MENU_W,
+      height: HELP_MENU_H,
+      useContentSize: true,
+      parent: mainWindow,
+      frame: false,
+      transparent: true,
+      resizable: false,
+      movable: false,
+      minimizable: false,
+      maximizable: false,
+      fullscreenable: false,
+      skipTaskbar: true,
+      show: false,
+      focusable: false, // 不抢主窗口焦点：菜单保持原生交互、无焦点闪烁
+      hasShadow: false,
+      webPreferences: {
+        contextIsolation: true,
+        nodeIntegration: false,
+        sandbox: true,
+        preload: path.join(__dirname, 'helpmenu-preload.js'),
+      },
+    });
+    helpMenuWin.setMenu(null);
+    helpMenuWin.loadFile(path.join(__dirname, 'helpmenu.html'));
+    helpMenuWin.once('ready-to-show', () => {
+      if (helpMenuWin && !helpMenuWin.isDestroyed()) helpMenuWin.show();
+    });
+    helpMenuWin.on('closed', () => { helpMenuWin = null; });
+  });
+}
+
 function registerHelpIpc() {
-  ipcMain.on('tb:menu-action', (e, action) => {
+  ipcMain.on('tb:help-toggle', () => {
+    if (helpMenuWin && !helpMenuWin.isDestroyed()) closeHelpMenu();
+    else openHelpMenu();
+  });
+  ipcMain.on('tb:help-close', () => closeHelpMenu());
+  ipcMain.on('hm:action', (e, action) => {
     log(`帮助菜单动作: ${action}`);
+    closeHelpMenu();
     if (action === 'check-update') checkDshUpdate(true);
     else if (action === 'about') showAbout();
   });
@@ -499,6 +590,16 @@ function createWindow() {
   mainWindow.contentView.addChildView(dshView);
   layout();
   mainWindow.on('resize', layout);
+  // 窗口移动/缩放时菜单跟随按钮位置；最小化时关闭
+  mainWindow.on('move', scheduleRepositionHelpMenu);
+  mainWindow.on('resize', scheduleRepositionHelpMenu);
+  mainWindow.on('minimize', closeHelpMenu);
+  // 点击 DSH 页面任意处 / 按 Esc → 关闭菜单
+  dshView.webContents.on('input-event', (event, input) => {
+    if (input.type === 'mouseDown' || (input.type === 'keyDown' && input.key === 'Escape')) {
+      closeHelpMenu();
+    }
+  });
 
   // 外部链接交给系统浏览器，不在 App 内开新窗口
   dshView.webContents.setWindowOpenHandler(({ url }) => {

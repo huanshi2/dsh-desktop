@@ -15,10 +15,6 @@
     --tb-btn: #c7d0e2;
     --tb-hover: rgba(255, 255, 255, .12);
     --tb-active: rgba(255, 255, 255, .18);
-    --menu-bg: #151c33;
-    --menu-border: rgba(76, 194, 255, .25);
-    --menu-shadow: rgba(0, 0, 0, .55);
-    --menu-item-hover: rgba(76, 194, 255, .16);
   }
   @media (prefers-color-scheme: light) {
     :root {
@@ -31,10 +27,6 @@
       --tb-btn: #3a4256;
       --tb-hover: rgba(0, 0, 0, .08);
       --tb-active: rgba(0, 0, 0, .14);
-      --menu-bg: #ffffff;
-      --menu-border: rgba(37, 99, 235, .22);
-      --menu-shadow: rgba(0, 0, 0, .18);
-      --menu-item-hover: rgba(37, 99, 235, .10);
     }
   }
   * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -86,31 +78,6 @@
   }
   #btn-help:hover { background: var(--tb-hover); color: var(--tb-fg); }
   #btn-help:active { background: var(--tb-active); }
-
-  /* ===== 下拉菜单（HTML 实现：位置由 JS 按按钮实际坐标计算） ===== */
-  #menu {
-    position: fixed;
-    min-width: 170px;
-    padding: 4px;
-    background: var(--menu-bg);
-    border: 1px solid var(--menu-border);
-    border-radius: 8px;
-    box-shadow: 0 8px 24px var(--menu-shadow);
-    z-index: 2147483647;
-    font-size: 12px;
-    -webkit-app-region: no-drag;
-    display: none;
-  }
-  #menu.open { display: block; }
-  #menu .item {
-    padding: 7px 14px;
-    border-radius: 5px;
-    cursor: pointer;
-    color: var(--tb-fg);
-    white-space: nowrap;
-    transition: background .1s;
-  }
-  #menu .item:hover { background: var(--menu-item-hover); }
 </style>
 </head>
 <body>
@@ -121,48 +88,25 @@
     <button id="btn-help" title="帮助（检查更新 / 关于）">?</button>
   </div>
 
-  <div id="menu">
-    <div class="item" data-action="check-update">检查更新</div>
-    <div class="item" data-action="about">关于 DSH Desktop</div>
-  </div>
-
   <script>
     const tb = window.titlebarBridge;
     const btn = document.getElementById('btn-help');
-    const menu = document.getElementById('menu');
-
-    function openMenu() {
-      // 用按钮的实际渲染坐标定位菜单（CSS 像素，无 DPI 误差）：
-      // 菜单左缘 = 按钮左缘，菜单顶部 = 按钮下缘 + 4px → 从按钮正下方弹出
-      const r = btn.getBoundingClientRect();
-      menu.style.left = r.left + 'px';
-      menu.style.top = (r.bottom + 4) + 'px';
-      menu.classList.add('open');
-    }
-    function closeMenu() { menu.classList.remove('open'); }
 
     if (tb) {
       tb.getVersion().then(v => {
         document.getElementById('ver').textContent = v ? 'v' + v : '';
       }).catch(() => {});
 
-      btn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        menu.classList.contains('open') ? closeMenu() : openMenu();
-      });
+      // 注意：菜单不能放在 titlebar 的 DOM 里（会被其下的 WebContentsView 遮挡），
+      // 统一由主进程弹出独立菜单窗口（helpmenu.html），这里只转发点击。
+      btn.addEventListener('click', () => tb.helpToggle());
 
-      // 点击菜单项 → 通知主进程执行（注意：直接走 preload 暴露的 tb，不要用主世界 bridge）
-      menu.querySelectorAll('.item').forEach(item => {
-        item.addEventListener('click', () => {
-          const action = item.dataset.action;
-          closeMenu();
-          tb.menuAction(action);
-        });
-      });
-
-      // 点击标题栏其他区域 → 关闭菜单
+      // 点击标题栏其他区域 / 按 Esc → 关闭菜单
       document.addEventListener('click', (e) => {
-        if (!e.target.closest('#menu') && !e.target.closest('#btn-help')) closeMenu();
+        if (!e.target.closest('#btn-help')) tb.helpClose();
+      });
+      window.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') tb.helpClose();
       });
     }
   </script>
