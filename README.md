@@ -30,14 +30,21 @@ DSH（DeepSeek Harness）本身是一个命令行/服务程序：`dsh web` 会�
 | 自动解析 dsh | 依次尝试：`dsh` 命令 → npm 缓存 → `npx` 在线兜底 |
 | 日志 | 运行日志写入 `%APPDATA%\DSH Desktop\dsh.log` |
 | 版本说明 | 标题栏常驻显示版本号；「帮助 → 关于」查看详细信息 |
-| 检查更新 | 启动后后台**静默检查** DSH 内核更新（有新版本才提示）；「帮助」菜单可手动检查 DSH 内核与桌面版（GitHub Releases） |
+| 检查更新 | 启动后后台**静默检查** DSH 内核与桌面版更新；有新版本时**右上角弹非阻塞角标**（可「立即更新」或「忽略此版本」，不打断使用）；「帮助」菜单可手动检查并在 App 内直接更新 |
 | 崩溃自愈 | 渲染进程崩溃自动重载；DSH 服务异常退出可一键「重新启动」 |
 | 重启服务 | 「文件 → 重启服务」快速重启 DSH 进程 |
 | 自动打包 | GitHub Actions：推送 `v*` 标签即自动构建 exe 并发布 Release |
 
 ## 版本说明（Changelog）
 
-### v1.1.0（当前）
+### v1.1.2（当前）
+- **DSH 内核支持 App 内一键更新**：发现新版后点「立即更新」即可，App 把新内核安装到自管目录（`%APPDATA%\DSH Desktop\dsh`）并自动重启服务，无需终端（需本机有 npm）
+- **桌面版支持 App 内自更新**：检查到新版后「立即更新」，自动下载、定位安装位置（桌面/开始菜单快捷方式）、替换 exe 并重启新版
+- **更新提示改为非阻塞角标**：启动静默检查发现新版时，右上角弹出小卡片（不抢焦点、不挡使用），可「立即更新」或「忽略此版本」（该版本不再提示）
+- 修复便携版下 npm 更新路径解析失败（绝对路径经 cmd 转发被截断）的问题
+- 更新安装实时显示进度；后续增量更新复用 npm 缓存加速
+
+### v1.1.0
 - 产品名改为全英文 **DSH Desktop**（窗口标题 / exe 文件名 / 快捷方式 / 数据目录）
 - 启动后自动静默检查 DSH 内核更新（仅在有新版时提示）
 - 健壮性：DSH 服务异常退出时提供「重新启动」；渲染进程崩溃自动重载；「重启服务」不再误判端口占用
@@ -55,7 +62,12 @@ DSH（DeepSeek Harness）本身是一个命令行/服务程序：`dsh web` 会�
 
 ### 1. DSH 内核更新（重要）
 DSH 本体由官方持续迭代，桌面版每次启动都会使用**当前缓存的最新内核**，并自动静默检查新版本。
-升级内核（在终端执行）：
+更新内核最省事的方式是在 App 里点 **「帮助 → 检查并更新 DSH」**，发现有新版时点「立即更新」：
+App 会把新版下载安装到自己的托管目录（`%APPDATA%\DSH Desktop\dsh`）并自动重启服务，无需终端。
+
+> 前提：本机需已安装 Node.js（含 npm）。App 内更新仅影响托管副本，不会改动全局安装。
+
+也可以在终端手动升级：
 
 ```bash
 npm i -g @deepseek-ai/dsh        # 全局安装
@@ -63,11 +75,16 @@ npm i -g @deepseek-ai/dsh        # 全局安装
 npx --yes @deepseek-ai/dsh --version   # 验证
 ```
 
-升级后重新打开桌面版即生效。也可以在 App 里点 **「帮助 → 检查 DSH 更新」** 手动查看。
+App 的 DSH 启动优先级：自定义命令（config）> **App 托管版** > 全局 `dsh` > npx 缓存 > npx 在线。App 内更新过之后，会一直优先使用托管版。
 
 ### 2. 桌面版自身更新
-- 从 [GitHub Releases](https://github.com/huanshi2/dsh-desktop/releases) 下载最新 exe 覆盖即可。
-- 本仓库已内置更新源（`config.json` 的 `updateRepo: "huanshi2/dsh-desktop"`）：App 里点 **「帮助 → 检查桌面版更新」** 会比对 GitHub 最新 Release（tag 如 `v1.1.0`）并打开下载页。
+- **App 内直接更新**：点 **「帮助 → 检查桌面版更新」**，发现新版后点「立即更新」，App 会：
+  1. 从 GitHub Releases 下载新 exe；
+  2. 通过桌面/开始菜单快捷方式自动定位安装位置；
+  3. 更新快捷方式指向、替换 exe，并自动重启新版。
+- 若找不到快捷方式（未装快捷方式），则降级为下载到本地（`%APPDATA%\DSH Desktop\updates\`），提示手动替换。
+- 也可从 [GitHub Releases](https://github.com/huanshi2/dsh-desktop/releases) 手动下载最新 exe 覆盖。
+- 更新源：`config.json` 的 `updateRepo: "huanshi2/dsh-desktop"`（GitHub 最新 Release 的 tag 如 `v1.1.0`）。
 
 ### 3. 维护者发布新版本
 推送标签即自动构建发布（GitHub Actions）：
@@ -81,7 +98,7 @@ git push origin v1.2.0
 
 ## 使用
 
-1. 从 [Releases](https://github.com/huanshi2/dsh-desktop/releases) 下载 `DSH-Desktop-1.1.0.exe`（或按「构建」自己打包），双击运行。
+1. 从 [Releases](https://github.com/huanshi2/dsh-desktop/releases) 下载 `DSH-Desktop-1.1.2.exe`（或按「构建」自己打包），双击运行。
 2. 等待加载页结束，DSH 界面自动打开（默认 http://127.0.0.1:3080）。
 3. 首次启动较慢（1~5 分钟）：DSH 需要初始化 profile 并安装插件，请耐心等待。
 4. 用完点右上角 ✕ 关闭，DSH 服务随之停止。
@@ -143,7 +160,7 @@ dsh-desktop/
 | 首次启动 1~5 分钟 | 正常：DSH 初始化 profile、安装插件 |
 | 提示「端口已被占用」 | 已有 DSH 实例在运行：可「直接打开」复用；或先结束占用进程 |
 | 「DSH 服务已退出 / 启动超时」 | 弹窗点「重新启动」重试；查看 `%APPDATA%\DSH Desktop\dsh.log` 定位原因 |
-| 提示 DSH 内核有更新 | 终端执行 `npm i -g @deepseek-ai/dsh` 后重启桌面版 |
+| 提示 DSH 内核有更新 | 右上角角标点「立即更新」在 App 内升级（需本机有 npm）；或「忽略此版本」不再提示该版本；也可终端执行 `npm i -g @deepseek-ai/dsh` |
 | 关闭窗口后端口仍被占用 | 一般不会发生（进程树已杀）；若出现，`netstat -ano \| findstr 3080` 手动清理 |
 | 与网页版并存 | 把端口配置为 3090（`%APPDATA%\DSH Desktop\config.json`），两个实例互不干扰 |
 

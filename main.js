@@ -18,6 +18,8 @@
 
 const { app, BrowserWindow, WebContentsView, dialog, shell, Menu, ipcMain, nativeTheme } = require('electron');
 const { spawn, spawnSync } = require('child_process');
+const { pipeline } = require('stream/promises');
+const { Readable, Transform } = require('stream');
 const fs = require('fs');
 const path = require('path');
 const net = require('net');
@@ -40,7 +42,14 @@ let ownedServer = false; // 是否由本 App 拉起的 DSH（决定关闭时要�
 let quitting = false;
 let helpMenuWin = null; // "?"帮助按钮的下拉菜单（独立子窗口，避免被 WebContentsView 遮挡）
 const HELP_MENU_W = 190; // 菜单窗口宽（px，DIP）
-const HELP_MENU_H = 78;  // 菜单窗口高（px，DIP）
+const HELP_MENU_H = 110; // 菜单窗口高（px，DIP），兜底值；加载后按内容自适应修正（3 项约需 96~100px）
+
+// 更新提示角标（非阻塞、不抢焦点；忽略的版本不再提示）
+let updateNotifyWin = null;
+let pendingDshUpdate = null;  // 角标中待处理的 DSH 新版本
+let pendingAppUpdate = null;  // 角标中待处理的桌面版新版本
+const UPDATE_NOTIFY_W = 300;  // 角标宽（px，DIP）
+const UPDATE_NOTIFY_H = 122;  // 角标高（px，DIP）
 
 // ---------------- 配置 ----------------
 // 测试/自定义用户数据目录（必须在 app ready 之前设置）
@@ -78,7 +87,7 @@ function log(msg) {
 }
 
 // ---------------- dsh 可执行文件解析 ----------------
-// 优先级：config.dshCommand 显式指定 > PATH 上的 dsh > npx 缓存里的 @deepseek-ai/dsh > npx 在线安装
+// 优先级：config.dshCommand 显式指定 > 应用托管安装 > PATH 上的 dsh > npx 缓存 > npx 在线安装
 function scanNpxCacheDsh() {
   const roots = [
     process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'npm-cache', '_npx') : null,
@@ -105,8 +114,46 @@ function scanNpxCacheDsh() {
   return best ? best.bin : null;
 }
 
-/** 当前使用的 DSH 内核版本（解析自 npx 缓存；PATH/npx 兜底时可能未知） */
+// ---------------- 应用托管 DSH 安装 ----------------
+// App 在 <userData>/dsh 下托管一份 DSH 安装，可在 App 内用 npm 升级，
+// 启动时优先使用它，避免依赖 npx 缓存（会被 npm 随时清理）或全局安装。
+function managedDshDir() {
+  return path.join(app.getPath('userData'), 'dsh');
+}
+
+function managedDshBin() {
+  const bin = path.join(managedDshDir(), 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js');
+  return fs.existsSync(bin) ? bin : null;
+}
+
+function getManagedDshVersion() {
+  try {
+    const pkg = JSON.parse(fs.readFileSync(
+      path.join(managedDshDir(), 'node_modules', '@deepseek-ai', 'dsh', 'package.json'), 'utf8'));
+    return pkg.version || null;
+  } catch { /* 未安装 */ }
+  return null;
+}
+
+/** PATH 上全局安装的 dsh 版本（dsh --version） */
+function getPathDshVersion() {
+  if (!whereOnPath('dsh')) return null;
+  try {
+    const r = spawnSync('dsh', ['--version'], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, timeout: 15000 });
+    if (r.status === 0) {
+      const m = /(\d+\.\d+\.\d+(?:-[0-9A-Za-z.\-]+)?)/.exec(String(r.stdout || ''));
+      return m ? m[1] : null;
+    }
+  } catch { /* 忽略 */ }
+  return null;
+}
+
+/** 当前将实际使用的 DSH 内核版本：应用托管 > PATH > npx 缓存 */
 function getLocalDshVersion() {
+  const managed = getManagedDshVersion();
+  if (managed) return managed;
+  const pathVer = getPathDshVersion();
+  if (pathVer) return pathVer;
   const roots = [
     process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'npm-cache', '_npx') : null,
     process.env.APPDATA ? path.join(process.env.APPDATA, 'npm-cache', '_npx') : null,
@@ -172,16 +219,21 @@ function buildDshSpawn() {
   if (override) {
     return { command: override, args: [], shell: true, kind: 'override' };
   }
-  // 2. PATH 上的 dsh
+  // 2. 应用托管安装（App 内更新的版本，优先使用）
+  const managedBin = managedDshBin();
+  if (managedBin) {
+    return { command: 'node', args: [], shell: false, kind: 'managed', bin: managedBin };
+  }
+  // 3. PATH 上的 dsh
   if (whereOnPath('dsh')) {
     return { command: 'dsh', args: ['web', '--port', String(PORT)], shell: false, kind: 'dsh' };
   }
-  // 3. npx 缓存（本机已有 @deepseek-ai/dsh 0.1.0-rc.6）
+  // 4. npx 缓存（本机已有 @deepseek-ai/dsh 0.1.0-rc.6）
   const cachedBin = scanNpxCacheDsh();
   if (cachedBin) {
     return { command: 'node', args: [], shell: false, kind: 'cached', bin: cachedBin };
   }
-  // 4. npx 在线兜底
+  // 5. npx 在线兜底
   return { command: 'npx.cmd', args: ['--yes', '@deepseek-ai/dsh', 'web', '--port', String(PORT)], shell: true, kind: 'npx' };
 }
 
@@ -221,8 +273,8 @@ async function startDsh() {
 
   let command = plan.command;
   let args = plan.args;
-  if (plan.kind === 'cached') {
-    command = process.env.DSH_DESKTOP_NODE || 'node'; // 用 node 运行缓存的 dsh bin.js
+  if (plan.kind === 'cached' || plan.kind === 'managed') {
+    command = process.env.DSH_DESKTOP_NODE || 'node'; // 用 node 运行托管/npx 缓存里的 dsh bin.js
     args = [plan.bin, 'web', '--port', String(PORT)];
   }
 
@@ -353,12 +405,25 @@ async function checkDshUpdate(manual = true) {
     const latest = data.version;
     const cmp = compareVersions(latest, localVer);
     if (cmp > 0) {
-      dialog.showMessageBox(mainWindow || undefined, {
-        type: 'info', title: '发现 DSH 新版本',
-        message: `DSH 有新版本可用`,
-        detail: `当前: ${localVer}\n最新: ${latest}\n\n升级方法（在终端执行）：\n  npm i -g @deepseek-ai/dsh\n\n下次启动桌面版会自动使用新版本。`,
-        buttons: ['确定'],
-      });
+      if (manual) {
+        const { response } = await dialog.showMessageBox(mainWindow || undefined, {
+          type: 'info', title: '发现 DSH 新版本',
+          message: `DSH 有新版本可用`,
+          detail: `当前: ${localVer}\n最新: ${latest}\n\n点击「立即更新」将在 App 内下载安装新版（需本机已安装 npm），完成后自动用新版本重启服务。`,
+          buttons: ['立即更新', '稍后'],
+          defaultId: 0,
+          cancelId: 1,
+        });
+        if (response === 0) await runDshUpdate(latest);
+      } else {
+        // 启动时静默检查：不弹模态框，用右上角角标提示（可选更新，不挡进入）
+        if (ignoredDshVersion() === latest) {
+          log(`已忽略 DSH ${latest} 的更新提示，跳过`);
+        } else {
+          pendingDshUpdate = { latest };
+          showUpdateNotify({ cur: localVer, latest, kind: 'dsh' });
+        }
+      }
     } else if (cmp === 0) {
       if (manual) {
         dialog.showMessageBox(mainWindow || undefined, {
@@ -379,6 +444,130 @@ async function checkDshUpdate(manual = true) {
       message: '无法连接 npm registry',
       detail: String(e.message), buttons: ['确定'],
     });
+  }
+}
+
+// 用 npm 把指定版本安装到应用托管目录（<userData>/dsh），返回 { ok, version?, error? }
+// 注意：不能把绝对路径传给 --prefix —— 经 cmd 转发会丢失盘符/被截断（便携版 cwd 是临时目录），
+// 这里改用 spawn 的 cwd 直接指定目录，并预写最小 package.json。
+// --prefer-offline 让后续增量更新复用 npm 缓存，显著加快（首次全量安装仍需下载完整依赖树）。
+function installDshUpdate(version) {
+  const dir = managedDshDir();
+  fs.mkdirSync(dir, { recursive: true });
+  try {
+    const pkgJson = path.join(dir, 'package.json');
+    if (!fs.existsSync(pkgJson)) {
+      fs.writeFileSync(pkgJson, JSON.stringify({ name: 'dsh-desktop-managed', private: true, version: '0.0.0' }, null, 2));
+    }
+  } catch (e) { log(`写入 package.json 失败: ${e.message}`); }
+  const spec = version ? `@deepseek-ai/dsh@${version}` : '@deepseek-ai/dsh';
+  log(`安装 DSH ${spec} → ${dir}`);
+  return new Promise((resolve) => {
+    const child = spawn('npm.cmd',
+      ['install', '--prefer-offline', '--no-audit', '--no-fund', '--loglevel=error', spec],
+      { cwd: dir, shell: true, windowsHide: true, env: { ...process.env }, stdio: ['ignore', 'pipe', 'pipe'] });
+    let output = '';
+    const progressLines = [];
+    let dirty = false;
+    const onData = (d) => {
+      const s = String(d);
+      output += s;
+      log(`[npm] ${s.trim()}`);
+      const lines = s.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+      for (const l of lines) {
+        if (progressLines.length >= 15) progressLines.shift();
+        progressLines.push(l);
+      }
+      dirty = true;
+    };
+    child.stdout.on('data', onData);
+    child.stderr.on('data', onData);
+    const timer = setInterval(() => {
+      if (dirty && progressLines.length) {
+        dirty = false;
+        pushLoadingProgress(progressLines.join('\n'));
+      }
+    }, 400);
+    child.on('error', (err) => {
+      clearInterval(timer);
+      pushLoadingProgress(`安装进程启动失败: ${err.message}`);
+      resolve({ ok: false, error: err.message, output });
+    });
+    child.on('close', (code) => {
+      clearInterval(timer);
+      if (code === 0) {
+        pushLoadingProgress('安装完成，正在用新版本重启服务…');
+        resolve({ ok: true, version: getManagedDshVersion(), output });
+      } else {
+        pushLoadingProgress(`安装失败（npm 退出码 ${code}），正在用原版本重启服务…`);
+        resolve({ ok: false, code, output });
+      }
+    });
+  });
+}
+
+// 执行"立即更新"：停止旧服务 → npm 安装新版 → 用新版重启服务
+async function runDshUpdate(version) {
+  if (!whereOnPath('npm')) {
+    dialog.showMessageBox(mainWindow || undefined, {
+      type: 'error', title: 'DSH 更新',
+      message: '未检测到 npm，无法在 App 内更新',
+      detail: '请先安装 Node.js（含 npm）后重试。\n或在终端手动执行：npm i -g @deepseek-ai/dsh',
+      buttons: ['确定'],
+    });
+    return;
+  }
+  const wasRunning = ownedServer && !!dshProcess;
+  if (wasRunning) {
+    ownedServer = false; // 避免 stopDsh 后 exit 处理器弹"服务已退出"
+    stopDsh();
+  }
+  showLoading(
+    `正在安装 DSH ${version}…`,
+    '首次更新需下载完整依赖，约 1~3 分钟；下方为实时进度。窗口内可看到下载过程。'
+  );
+
+  const result = await installDshUpdate(version);
+  if (result.ok && result.version) {
+    log(`DSH 更新成功: ${result.version}`);
+    if (wasRunning) {
+      const ready = await startDsh();
+      if (ready && mainWindow && !mainWindow.isDestroyed()) {
+        loadDshPage();
+        dialog.showMessageBox(mainWindow, {
+          type: 'info', title: 'DSH 更新完成',
+          message: `DSH 已更新到 v${result.version}`,
+          detail: '服务已用新版本重启。',
+          buttons: ['确定'],
+        });
+      } else {
+        dialog.showMessageBox(mainWindow, {
+          type: 'error', title: 'DSH 更新完成但启动失败',
+          message: `DSH 已更新到 v${result.version}，但服务未能启动`,
+          detail: `日志: ${LOG_PATH}`,
+          buttons: ['确定'],
+        });
+      }
+    } else {
+      dialog.showMessageBox(mainWindow || undefined, {
+        type: 'info', title: 'DSH 更新完成',
+        message: `DSH 已更新到 v${result.version}`,
+        detail: '请重启桌面版以使用新版本。',
+        buttons: ['确定'],
+      });
+    }
+  } else {
+    log(`DSH 更新失败: ${result.error || ('npm 退出码 ' + result.code)}`);
+    dialog.showMessageBox(mainWindow || undefined, {
+      type: 'error', title: 'DSH 更新失败',
+      message: '安装新版本失败',
+      detail: `错误: ${result.error || ('npm 退出码 ' + result.code)}\n\n日志: ${LOG_PATH}`,
+      buttons: ['确定'],
+    });
+    if (wasRunning && mainWindow && !mainWindow.isDestroyed()) {
+      showLoading('正在重新启动 DSH…');
+      startDsh();
+    }
   }
 }
 
@@ -405,14 +594,26 @@ async function checkAppUpdate(manual = true) {
     const latest = String(rel.tag_name || '').replace(/^v/i, '');
     const cmp = compareVersions(latest, APP_VERSION);
     if (cmp > 0) {
-      const { response } = await dialog.showMessageBox(mainWindow || undefined, {
-        type: 'info', title: '发现桌面版新版本',
-        message: `DSH 桌面版 v${latest} 已发布`,
-        detail: `当前: v${APP_VERSION}\n最新: v${latest}\n\n点击「打开下载页」跳转到 GitHub Releases。`,
-        buttons: ['打开下载页', '关闭'],
-        defaultId: 0, cancelId: 1,
-      });
-      if (response === 0 && rel.html_url) shell.openExternal(rel.html_url);
+      if (manual) {
+        const { response } = await dialog.showMessageBox(mainWindow || undefined, {
+          type: 'info', title: '发现桌面版新版本',
+          message: `DSH 桌面版 v${latest} 已发布`,
+          detail: `当前: v${APP_VERSION}\n最新: v${latest}\n\n「立即更新」将下载新版并自动替换（通过桌面快捷方式定位安装位置）；也可打开 GitHub 下载页手动更新。`,
+          buttons: ['立即更新', '打开下载页', '稍后'],
+          defaultId: 0,
+          cancelId: 2,
+        });
+        if (response === 0) await runAppUpdate(latest);
+        else if (response === 1 && rel.html_url) shell.openExternal(rel.html_url);
+      } else {
+        // 启动时静默检查：右上角角标提示，可忽略（该版本不再提示）
+        if (ignoredAppVersion() === latest) {
+          log(`已忽略桌面版 v${latest} 的更新提示，跳过`);
+        } else {
+          pendingAppUpdate = { latest };
+          showUpdateNotify({ cur: APP_VERSION, latest, kind: 'app' });
+        }
+      }
     } else if (manual) {
       dialog.showMessageBox(mainWindow || undefined, {
         type: 'info', title: '检查桌面版更新',
@@ -509,6 +710,23 @@ function openHelpMenu() {
     });
     helpMenuWin.setMenu(null);
     helpMenuWin.loadFile(path.join(__dirname, 'helpmenu.html'));
+    // 按菜单内容自然高度自适应窗口：避免固定高度把最后一个菜单项裁掉一半
+    helpMenuWin.webContents.once('did-finish-load', () => {
+      helpMenuWin.webContents.executeJavaScript(`(() => {
+        const menu = document.getElementById('menu');
+        if (!menu) return null;
+        const items = Array.from(menu.querySelectorAll('.item'));
+        const cs = getComputedStyle(menu);
+        const vPad = parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom);
+        const vBorder = parseFloat(cs.borderTopWidth) + parseFloat(cs.borderBottomWidth);
+        const itemH = items.reduce((s, el) => s + el.getBoundingClientRect().height, 0);
+        return Math.ceil(itemH + vPad + vBorder);
+      })()`).then((h) => {
+        if (typeof h === 'number' && h > 0 && helpMenuWin && !helpMenuWin.isDestroyed()) {
+          helpMenuWin.setContentSize(HELP_MENU_W, Math.max(h, 1));
+        }
+      }).catch(() => {});
+    });
     helpMenuWin.once('ready-to-show', () => {
       if (helpMenuWin && !helpMenuWin.isDestroyed()) helpMenuWin.show();
     });
@@ -534,6 +752,295 @@ function registerHelpIpc() {
   ipcMain.handle('dsh-desktop:about', () => { showAbout(); return true; });
   ipcMain.handle('dsh-desktop:check-dsh-update', () => { checkDshUpdate(true); return true; });
   ipcMain.handle('dsh-desktop:check-app-update', () => { checkAppUpdate(true); return true; });
+  // 更新角标按钮：update=立即更新，ignore=忽略此版本（该版本不再提示）
+  ipcMain.on('un:action', (e, action) => {
+    closeUpdateNotify();
+    if (action === 'update') {
+      const d = pendingDshUpdate;
+      pendingDshUpdate = null;
+      if (d) { runDshUpdate(d.latest); return; }
+      const a = pendingAppUpdate;
+      pendingAppUpdate = null;
+      if (a) { runAppUpdate(a.latest); }
+    } else if (action === 'ignore') {
+      const d = pendingDshUpdate;
+      pendingDshUpdate = null;
+      if (d) ignoreDshVersion(d.latest);
+      const a = pendingAppUpdate;
+      pendingAppUpdate = null;
+      if (a) ignoreAppVersion(a.latest);
+    }
+  });
+}
+
+// ---------------- 更新角标（非阻塞提示） ----------------
+function closeUpdateNotify() {
+  if (updateNotifyWin && !updateNotifyWin.isDestroyed()) updateNotifyWin.close();
+}
+
+function showUpdateNotify({ cur, latest, kind }) {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (updateNotifyWin && !updateNotifyWin.isDestroyed()) return;
+  const cb = mainWindow.getContentBounds();
+  const x = Math.round(cb.x + cb.width - UPDATE_NOTIFY_W - 16);
+  const y = Math.round(cb.y + TITLEBAR_HEIGHT + 12);
+  updateNotifyWin = new BrowserWindow({
+    x, y,
+    width: UPDATE_NOTIFY_W,
+    height: UPDATE_NOTIFY_H,
+    useContentSize: true,
+    parent: mainWindow,
+    frame: false,
+    transparent: true,
+    resizable: false,
+    movable: false,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    skipTaskbar: true,
+    show: false,
+    focusable: false, // 不抢主窗口焦点：用户可继续正常使用
+    hasShadow: false,
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      preload: path.join(__dirname, 'updatenotify-preload.js'),
+    },
+  });
+  updateNotifyWin.setMenu(null);
+  updateNotifyWin.loadFile(path.join(__dirname, 'updatenotify.html'), {
+    query: { cur: encodeURIComponent(cur), latest: encodeURIComponent(latest), kind: kind || 'dsh' },
+  });
+  updateNotifyWin.once('ready-to-show', () => {
+    if (updateNotifyWin && !updateNotifyWin.isDestroyed()) updateNotifyWin.show();
+  });
+  updateNotifyWin.on('closed', () => { updateNotifyWin = null; });
+  // 90 秒后自动关闭，避免长时间挂着
+  setTimeout(() => closeUpdateNotify(), 90000);
+}
+
+// ---------------- 更新状态持久化（忽略的版本） ----------------
+function updateStatePath() {
+  return path.join(app.getPath('userData'), 'update-state.json');
+}
+
+function readUpdateState() {
+  try { return JSON.parse(fs.readFileSync(updateStatePath(), 'utf8')); } catch { return {}; }
+}
+
+function writeUpdateState(s) {
+  try { fs.writeFileSync(updateStatePath(), JSON.stringify(s, null, 2)); } catch { /* 忽略 */ }
+}
+
+function ignoredDshVersion() {
+  return readUpdateState().ignoredDshVersion || null;
+}
+
+function ignoreDshVersion(v) {
+  const s = readUpdateState();
+  s.ignoredDshVersion = v;
+  writeUpdateState(s);
+  log(`已忽略 DSH ${v} 的更新提示`);
+}
+
+function ignoredAppVersion() {
+  return readUpdateState().ignoredAppVersion || null;
+}
+
+function ignoreAppVersion(v) {
+  const s = readUpdateState();
+  s.ignoredAppVersion = v;
+  writeUpdateState(s);
+  log(`已忽略桌面版 v${v} 的更新提示`);
+}
+
+// ---------------- 桌面版更新（便携版 exe 定位/替换） ----------------
+// 便携版运行时进程在临时目录，无法直接得知原始安装路径。
+// 通过桌面/开始菜单里的快捷方式（指向 DSH-Desktop-*.exe）反查安装目录。
+function findInstalledExe() {
+  const roots = [
+    process.env.USERPROFILE ? path.join(process.env.USERPROFILE, 'Desktop') : null,
+    process.env.USERPROFILE ? path.join(process.env.USERPROFILE, 'OneDrive', 'Desktop') : null,
+    process.env.APPDATA ? path.join(process.env.APPDATA, 'Microsoft', 'Windows', 'Start Menu', 'Programs') : null,
+  ].filter(Boolean);
+  const psScript = [
+    "$ErrorActionPreference='SilentlyContinue'",
+    `$roots = @(${roots.map(r => `'${r.replace(/'/g, "''")}'`).join(',')})`,
+    'foreach ($d in $roots) {',
+    '  if (-not (Test-Path -LiteralPath $d)) { continue }',
+    '  Get-ChildItem -LiteralPath $d -Filter *.lnk | ForEach-Object {',
+    '    $s = (New-Object -ComObject WScript.Shell).CreateShortcut($_.FullName)',
+    '    $t = $s.TargetPath',
+    "    if ($t -match 'DSH-Desktop-\\d+\\.\\d+\\.\\d+\\.exe') { Write-Output ($_.FullName + '|' + $t) }",
+    '  }',
+    '}',
+  ].join('\n');
+  try {
+    const r = spawnSync('powershell.exe', ['-NoProfile', '-Command', psScript],
+      { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, timeout: 15000, encoding: 'utf8' });
+    if (r.status !== 0) return null;
+    const line = String(r.stdout || '').split(/\r?\n/).map(l => l.trim()).find(l => l.includes('|'));
+    if (!line) return null;
+    const [lnkPath, exePath] = line.split('|');
+    if (lnkPath && exePath && fs.existsSync(exePath)) {
+      return { lnkPath, exePath, dir: path.dirname(exePath), exeName: path.basename(exePath) };
+    }
+  } catch { /* 忽略 */ }
+  return null;
+}
+
+function updateShortcutTarget(lnkPath, newExePath) {
+  try {
+    const psScript = [
+      `$s = (New-Object -ComObject WScript.Shell).CreateShortcut('${lnkPath.replace(/'/g, "''")}')`,
+      `$s.TargetPath = '${newExePath.replace(/'/g, "''")}'`,
+      `$s.WorkingDirectory = '${path.dirname(newExePath).replace(/'/g, "''")}'`,
+      '$s.Save()',
+    ].join('\n');
+    const r = spawnSync('powershell.exe', ['-NoProfile', '-Command', psScript],
+      { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, timeout: 15000 });
+    return r.status === 0;
+  } catch { return false; }
+}
+
+// 从 GitHub release 下载指定版本 exe，返回 { ok, dest?, error? }，进度推送到加载页
+async function downloadReleaseAsset(url, dest) {
+  const dir = path.dirname(dest);
+  fs.mkdirSync(dir, { recursive: true });
+  let total = 0, received = 0;
+  try {
+    const res = await fetch(url, { headers: { 'User-Agent': 'dsh-desktop' }, redirect: 'follow' });
+    if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
+    total = Number(res.headers.get('content-length') || 0);
+    const show = () => {
+      if (total > 0) {
+        const pct = (received / total * 100).toFixed(0);
+        pushLoadingProgress(`正在下载 DSH 桌面版… ${(received / 1048576).toFixed(1)} / ${(total / 1048576).toFixed(1)} MB (${pct}%)`);
+      } else {
+        pushLoadingProgress(`正在下载 DSH 桌面版… ${(received / 1048576).toFixed(1)} MB`);
+      }
+    };
+    const counter = new Transform({
+      transform(chunk, enc, cb) {
+        received += chunk.length;
+        show();
+        cb(null, chunk);
+      },
+    });
+    await pipeline(Readable.fromWeb(res.body), counter, fs.createWriteStream(dest));
+    return { ok: true, dest, bytes: received };
+  } catch (e) {
+    try { fs.unlinkSync(dest); } catch { /* 忽略 */ }
+    return { ok: false, error: String(e.message || e) };
+  }
+}
+
+// 执行桌面版更新：下载 → 更新快捷方式 → 写替换脚本 → 退出并完成替换重启
+async function runAppUpdate(latest) {
+  const repo = process.env.DSH_DESKTOP_UPDATE_REPO || config.updateRepo;
+  if (!repo) {
+    dialog.showMessageBox(mainWindow || undefined, {
+      type: 'error', title: '桌面版更新',
+      message: '未配置更新源（config.json 的 updateRepo 为空）',
+      buttons: ['确定'],
+    });
+    return;
+  }
+  let assetUrl;
+  try {
+    assetUrl = await resolveReleaseAssetUrl(repo, latest);
+  } catch (e) {
+    dialog.showMessageBox(mainWindow || undefined, {
+      type: 'error', title: '桌面版更新失败',
+      message: '无法获取新版下载地址',
+      detail: String(e.message || e), buttons: ['确定'],
+    }).then(() => loadDshPage());
+    return;
+  }
+  const inst = findInstalledExe();
+  if (!inst) {
+    // 找不到快捷方式 → 降级为「下载到本地」
+    const dest = path.join(app.getPath('userData'), 'updates', `DSH-Desktop-${latest}.exe`);
+    showLoading(`正在下载 DSH 桌面版 v${latest}…`);
+    const dl = await downloadReleaseAsset(assetUrl, dest);
+    if (dl.ok) {
+      dialog.showMessageBox(mainWindow, {
+        type: 'info', title: '桌面版更新下载完成',
+        message: `已下载到: ${dest}`,
+        detail: '未找到桌面快捷方式，请关闭 App 后手动替换原 exe，或直接运行该文件。',
+        buttons: ['确定'],
+      }).then(() => loadDshPage());
+    } else {
+      dialog.showMessageBox(mainWindow, {
+        type: 'error', title: '桌面版更新下载失败',
+        message: dl.error, buttons: ['确定'],
+      }).then(() => loadDshPage());
+    }
+    return;
+  }
+  const dest = path.join(inst.dir, `DSH-Desktop-${latest}.exe`);
+  showLoading(`正在下载 DSH 桌面版 v${latest}…`);
+  const dl = await downloadReleaseAsset(assetUrl, dest);
+  if (!dl.ok) {
+    dialog.showMessageBox(mainWindow, {
+      type: 'error', title: '桌面版更新下载失败',
+      message: dl.error, buttons: ['确定'],
+    }).then(() => loadDshPage());
+    return;
+  }
+  // 更新快捷方式指向新 exe（退出前完成，避免文件被占用）
+  if (inst.lnkPath) {
+    if (!updateShortcutTarget(inst.lnkPath, dest)) log(`快捷方式更新失败: ${inst.lnkPath}`);
+    else log(`快捷方式已指向: ${dest}`);
+  }
+  // 写替换脚本：等待旧进程退出 → 删除旧 exe → 启动新 exe → 删除自身
+  const oldName = inst.exeName;
+  const batPath = path.join(app.getPath('userData'), 'selfupdate.bat');
+  const bat = [
+    '@echo off',
+    `set "OLD=${oldName}"`,
+    `set "DIR=${inst.dir}"`,
+    `set "NEW=DSH-Desktop-${latest}.exe"`,
+    ':WAIT',
+    `tasklist /fi "imagename eq %OLD%" 2>nul | find /i "%OLD%" >nul`,
+    'if %errorlevel%==0 ( timeout /t 1 /nobreak >nul & goto WAIT )',
+    `del /f /q "%DIR%\\%OLD%"`,
+    `start "" "%DIR%\\%NEW%"`,
+    'del /f /q "%~f0"',
+    'exit',
+  ].join('\r\n');
+  try { fs.writeFileSync(batPath, bat); } catch (e) {
+    dialog.showMessageBox(mainWindow, {
+      type: 'error', title: '桌面版更新失败',
+      message: `无法写入替换脚本: ${e.message}`, buttons: ['确定'],
+    }).then(() => loadDshPage());
+    return;
+  }
+  log(`桌面版更新就绪，退出并替换: ${oldName} → DSH-Desktop-${latest}.exe`);
+  dialog.showMessageBox(mainWindow, {
+    type: 'info', title: '桌面版更新',
+    message: `新版 v${latest} 已下载完成`,
+    detail: '点击「确定」将关闭本 App 并自动完成替换，然后启动新版。',
+    buttons: ['确定'],
+  }).then(() => {
+    try { spawn('cmd.exe', ['/c', batPath], { detached: true, stdio: 'ignore', windowsHide: true }).unref(); } catch { /* 忽略 */ }
+    app.quit();
+  });
+}
+
+// 解析 GitHub release 中对应版本的 exe 下载地址
+async function resolveReleaseAssetUrl(repo, version) {
+  const res = await fetch(`https://api.github.com/repos/${repo}/releases/latest`, {
+    headers: { 'User-Agent': 'dsh-desktop' },
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const rel = await res.json();
+  const targetName = `DSH-Desktop-${version}.exe`;
+  const assets = rel.assets || [];
+  const hit = assets.find(a => a.name === targetName) || assets.find(a => /^DSH-Desktop-.*\.exe$/i.test(a.name));
+  if (!hit) throw new Error(`Release 中未找到 ${targetName} 资产`);
+  return hit.browser_download_url;
 }
 
 // ---------------- 窗口（titleBarOverlay：系统按钮 + 自绘标题栏 + WebContentsView） ----------------
@@ -591,11 +1098,15 @@ function createWindow() {
   // 窗口移动/缩放时菜单跟随按钮位置；最小化时关闭
   mainWindow.on('move', scheduleRepositionHelpMenu);
   mainWindow.on('resize', scheduleRepositionHelpMenu);
+  mainWindow.on('move', closeUpdateNotify);
+  mainWindow.on('resize', closeUpdateNotify);
   mainWindow.on('minimize', closeHelpMenu);
-  // 点击 DSH 页面任意处 / 按 Esc → 关闭菜单
+  mainWindow.on('minimize', closeUpdateNotify);
+  // 点击 DSH 页面任意处 / 按 Esc → 关闭菜单与更新角标
   dshView.webContents.on('input-event', (event, input) => {
     if (input.type === 'mouseDown' || (input.type === 'keyDown' && input.key === 'Escape')) {
       closeHelpMenu();
+      closeUpdateNotify();
     }
   });
 
@@ -627,14 +1138,26 @@ function createWindow() {
   mainWindow.on('closed', () => {
     mainWindow = null;
     dshView = null;
+    closeUpdateNotify();
   });
 
   return mainWindow;
 }
 
-function showLoading(text) {
+function showLoading(text, hint) {
   if (dshView && !dshView.webContents.isDestroyed()) {
-    dshView.webContents.loadFile(path.join(__dirname, 'loading.html'), { query: { text: encodeURIComponent(text) } });
+    dshView.webContents.loadFile(path.join(__dirname, 'loading.html'), {
+      query: { text: encodeURIComponent(text), hint: hint ? encodeURIComponent(hint) : '' },
+    });
+  }
+}
+
+// 把实时进度文本推送到加载页（npm 输出等），失败静默忽略
+function pushLoadingProgress(text) {
+  if (dshView && !dshView.webContents.isDestroyed()) {
+    dshView.webContents.executeJavaScript(
+      `window.__setLoadProgress && window.__setLoadProgress(${JSON.stringify(text)})`
+    ).catch(() => {});
   }
 }
 
@@ -678,8 +1201,9 @@ async function boot(options = {}) {
   const ready = await startDsh();
   if (ready && mainWindow && !mainWindow.isDestroyed()) {
     loadDshPage();
-    // 后台静默检查 DSH 内核更新：有新版本才提示
+    // 后台静默检查更新（角标提示，不挡使用）：DSH 内核 + 桌面版
     checkDshUpdate(false).catch(() => {});
+    checkAppUpdate(false).catch(() => {});
   }
 }
 
@@ -712,5 +1236,6 @@ app.on('window-all-closed', () => {
 
 app.on('before-quit', () => {
   quitting = true;
+  closeUpdateNotify();
   if (ownedServer) stopDsh();
 });

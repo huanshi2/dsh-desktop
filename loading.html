@@ -34,6 +34,23 @@
   @keyframes spin { to { transform: rotate(360deg); } }
   .hint { font-size: 12px; color: #6b7690; margin-top: 14px; }
   code { background: #1a2138; padding: 1px 6px; border-radius: 4px; font-size: 12px; }
+  #progress {
+    display: none;
+    margin-top: 16px;
+    max-height: 140px;
+    overflow: hidden;
+    font-family: Consolas, "Courier New", monospace;
+    font-size: 11px;
+    line-height: 1.6;
+    color: #7fa8c9;
+    text-align: left;
+    background: rgba(0, 0, 0, .35);
+    border: 1px solid rgba(76, 194, 255, .15);
+    border-radius: 6px;
+    padding: 8px 10px;
+    white-space: pre-wrap;
+    word-break: break-all;
+  }
 </style>
 </head>
 <body>
@@ -42,14 +59,23 @@
     <h1>DSH Desktop</h1>
     <div class="sub" id="text">正在启动 DeepSeek Harness…</div>
     <div class="spinner"></div>
-    <div class="hint">首次启动可能需要几分钟（安装插件）。<br>如长时间无响应，关闭窗口后重试，详见日志。</div>
+    <pre id="progress"></pre>
+    <div class="hint" id="hint">首次启动可能需要几分钟（安装插件）。<br>如长时间无响应，关闭窗口后重试，详见日志。</div>
   </div>
   <script>
     try {
       const q = new URLSearchParams(location.search);
       const t = q.get('text');
       if (t) document.getElementById('text').textContent = decodeURIComponent(t);
+      const h = q.get('hint');
+      if (h) document.getElementById('hint').innerHTML = decodeURIComponent(h);
     } catch (e) {}
+    window.__setLoadProgress = function (text) {
+      const el = document.getElementById('progress');
+      if (!el) return;
+      el.style.display = 'block';
+      el.textContent = text;
+    };
   </script>
 </body>
 </html>
