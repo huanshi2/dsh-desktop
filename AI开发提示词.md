@@ -25,16 +25,17 @@
   tools/after-pack.js（打包钩子 rcedit 图标/版本）、.github/workflows/release.yml（云构建）
 
 ━━━ 版本规则（用户规定，必须遵守）━━━
-1. 小版本迭代：本地滚动更新，版本号 +0.0.1（如当前 1.1.1 → 1.1.2），
-   **不发布 GitHub Release**，只提交代码到 main
-2. 大版本（如 1.2.0）才发布 GitHub Release：推 tag（v1.2.0）触发 Actions 云构建，
-   会自动打包 exe 并更新 Release
-3. GitHub Releases 只保留两个：v1.1.0（初始版）+ v1.1.1（当前版）
-4. 每次改版：package.json version + tools/after-pack.js 的版本字符串同步改
+1. 版本节奏：**本地每 3 个 commit 切一个版本**。前 2 个 commit 版本号冻结不动，
+   到第 3 个 commit 才把版本号末位 +1（如当前 1.1.3 → 1.1.4）
+2. 切版本即发布：第 3 个 commit 时推 tag（如 v1.1.4）触发 Actions 云构建，
+   自动打包 exe 并创建 GitHub Release
+3. GitHub Releases **全部保留**，不删除历史 Release
+4. 计数起点：从上一版版本号提交之后开始数；当前基线 v1.1.3，下一个 commit 算第 1 个
+5. 每次切版本：package.json version + tools/after-pack.js 的版本字符串同步改
 
 ━━━ 安全红线（最重要，违反会毁掉用户正在进行的对话）━━━
 1. 用户可能正在用 App 对话（运行中的实例进程名 DSH Desktop.exe /
-   stub DSH-Desktop-1.1.1.exe）——【绝对禁止】按进程名/路径模式批量杀进程
+   stub DSH-Desktop-<版本>.exe，当前为 1.1.2）——【绝对禁止】按进程名/路径模式批量杀进程
 2. 清理测试进程：只用启动时记录的精确 PID，或按"stub 名 + 解压目录"双重确认
 3. 测试实例必须隔离：DSH_DESKTOP_PORT=31xx（避开用户端口）+ DSH_DESKTOP_USER_DATA=独立目录
 4. 测试优先用 dev 模式（npx electron .，进程名 electron.exe，与用户 App 物理隔离）
@@ -65,7 +66,7 @@
 □ 帮助菜单功能链路：CDP Input 点击菜单项 → 主进程日志出现动作
 □ 不碰用户运行中的实例；测试实例全部清理干净
 □ 版本号一致（package.json / after-pack.js / 窗口标题）
-□ 提交并推送 main；小版本不建 tag
+□ 提交并推送 main；并核对累计 commit 数——到第 3 个就切版本并推 tag 发 Release
 ```
 
 ---
@@ -82,5 +83,6 @@
 |---|---|
 | 加菜单项 | "帮助菜单 helpmenu.html 增加 X 项，main.js hm:action 加对应分支" |
 | 改标题栏样式 | "titlebar.html 的 CSS 变量（深色/浅色两套），保持 36px 高度" |
-| 发大版本 | "版本号改 1.2.0，commit 后 git tag v1.2.0 && git push origin v1.2.0，等 Actions 完成" |
-| 本地小版本 | "版本号 +0.0.1，本地打包（卡住就杀进程重试或走 Actions），不建 tag 不发布" |
+| 普通改动 | "正常改，commit 推 main，版本号不动（第 3 个 commit 才切版本）" |
+| 切版本发版 | "已到第 3 个 commit：版本号末位 +1（1.1.3 → 1.1.4），package.json + after-pack.js 同步改；commit 后 git tag v1.1.4 && git push origin v1.1.4，等 Actions 完成" |
+| 本地打包 | "electron-builder 本地打包（卡住就杀进程重试，或直接走 Actions 云构建）" |
